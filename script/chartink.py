@@ -12,6 +12,7 @@ import time
 CHARTINK_PROCESS = "https://chartink.com/screener/process"
 CHARTINK_HOME = "https://chartink.com/screener"
 
+
 def get_session():
     s = requests.Session()
     r = s.get(CHARTINK_HOME, timeout=10)
@@ -27,6 +28,7 @@ def fetch_condition_result(session, condition):
     r.raise_for_status()
     data = r.json()
     return pd.DataFrame(data.get("data", []))
+
 
 def read_conditions(file_path):
     with open(file_path, "r", encoding="utf-8") as f:
@@ -53,12 +55,15 @@ def read_conditions(file_path):
     else:
         parts = raw.splitlines()
 
-    conditions = [p.strip() for p in parts if p.strip()]
-    return conditions
+    return [p.strip() for p in parts if p.strip()]
+
 
 def intersect_results(all_frames, min_count):
     counter = Counter()
+
     for df in all_frames:
+        if "nsecode" not in df.columns:
+            continue
         counter.update(df["nsecode"].unique())
 
     result = [
@@ -67,13 +72,24 @@ def intersect_results(all_frames, min_count):
         if v >= min_count
     ]
 
-    return pd.DataFrame(result).sort_values("appearances", ascending=False)
+    # Always return a dataframe with expected columns
+    df_result = pd.DataFrame(result, columns=["nsecode", "appearances"])
+
+    if df_result.empty:
+        return df_result
+
+    return df_result.sort_values("appearances", ascending=False)
 
 
 def union_results(all_frames):
-    combined = pd.concat(all_frames, ignore_index=True)
-    combined = combined.drop_duplicates(subset=["nsecode"])
-    return combined
+    valid_frames = [df for df in all_frames if "nsecode" in df.columns]
+
+    if not valid_frames:
+        return pd.DataFrame(columns=["nsecode"])
+
+    combined = pd.concat(valid_frames, ignore_index=True)
+    return combined.drop_duplicates(subset=["nsecode"])
+
 
 def main():
     if len(sys.argv) < 3:
@@ -105,6 +121,8 @@ def main():
             df = fetch_condition_result(session, cond)
             if not df.empty:
                 all_frames.append(df)
+            else:
+                print(f"  → No results")
             time.sleep(1)
         except Exception as e:
             print(f"Skipped condition {i}: {e}")
@@ -118,8 +136,13 @@ def main():
     if mode == "intersect":
         repeat = input("\nMinimum appearances? [default 2]: ").strip()
         repeat = int(repeat) if repeat.isdigit() else 2
+
         final = intersect_results(all_frames, repeat)
         out = f"{base_name}_intersect.csv"
+
+        if final.empty:
+            print("\n⚠️ No symbols met the minimum appearance threshold.")
+
     else:
         final = union_results(all_frames)
         out = f"{base_name}_union.csv"
