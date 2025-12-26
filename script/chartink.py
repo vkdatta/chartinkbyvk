@@ -1,122 +1,133 @@
+#!/usr/bin/env python3
+
 import requests
 import pandas as pd
 from bs4 import BeautifulSoup
 from collections import Counter
+import sys
+import os
 import time
 
-def fetch_chartink(url):
-    session = requests.Session()
-    headers_base = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
-    
-    r = session.get(url, headers=headers_base)
-    soup = BeautifulSoup(r.content, "lxml")
-    csrf_token = soup.find("meta", {"name": "csrf-token"})["content"]
 
-    process_url = "https://chartink.com/screener/process"
-    headers = {**headers_base, "x-csrf-token": csrf_token}
+CHARTINK_PROCESS = "https://chartink.com/screener/process"
+CHARTINK_HOME = "https://chartink.com/screener"
 
-    textarea = soup.find("textarea", {"id": "scan_clause"})
-    if not textarea:
-        raise Exception(f"Could not extract condition from {url}")
-    clause = textarea.text.strip()
+def get_session():
+    s = requests.Session()
+    r = s.get(CHARTINK_HOME, timeout=10)
+    soup = BeautifulSoup(r.text, "lxml")
+    token = soup.find("meta", {"name": "csrf-token"})["content"]
+    s.headers.update({"x-csrf-token": token})
+    return s
 
-    resp = session.post(process_url, headers=headers, data={"scan_clause": clause})
-    resp.raise_for_status()
-    data = resp.json().get("data", [])
-    df = pd.DataFrame(data)
-    if "nsecode" in df.columns:
-        return df["nsecode"].dropna().tolist()
-    return []
 
-def read_urls(filename, sep):
-    with open(filename, "r") as f:
-        content = f.read().strip()
-    if sep == "space":
-        return content.split()
-    elif sep == "newline":
-        return content.splitlines()
-    elif sep == "comma":
-        return [u.strip() for u in content.split(",")]
-    elif sep == "tab":
-        return [u.strip() for u in content.split("\t")]
+def fetch_condition_result(session, condition):
+    payload = {"scan_clause": condition}
+    r = session.post(CHARTINK_PROCESS, data=payload, timeout=30)
+    r.raise_for_status()
+    data = r.json()
+    return pd.DataFrame(data.get("data", []))
+
+def read_conditions(file_path):
+    with open(file_path, "r", encoding="utf-8") as f:
+        raw = f.read()
+
+    print("\nSelect condition separator:")
+    print("1) New line (default)")
+    print("2) Comma (,)")
+    print("3) Semicolon (;)")
+    print("4) Tab")
+    print("5) Custom")
+
+    choice = input("Enter choice [1-5]: ").strip() or "1"
+
+    if choice == "2":
+        parts = raw.split(",")
+    elif choice == "3":
+        parts = raw.split(";")
+    elif choice == "4":
+        parts = raw.split("\t")
+    elif choice == "5":
+        sep = input("Enter custom separator: ")
+        parts = raw.split(sep)
     else:
-        return content.split(sep)
+        parts = raw.splitlines()
 
-def intersect(urls, min_occurrences=2, output_file=None):
-    all_symbols = []
-    for url in urls:
-        try:
-            symbols = fetch_chartink(url)
-            all_symbols.append(symbols)
-            print(f"{len(symbols)} stocks fetched from {url}")
-            time.sleep(1.5)
-        except Exception as e:
-            print(f"Error fetching {url}: {e}")
+    conditions = [p.strip() for p in parts if p.strip()]
+    return conditions
 
-    flat_list = [item for sublist in all_symbols for item in sublist]
-    counter = Counter(flat_list)
-    final_df = (
-        pd.DataFrame(counter.items(), columns=["nsecode", "appearances"])
-        .query(f"appearances >= {min_occurrences}")
-        .sort_values("appearances", ascending=False)
-        .reset_index(drop=True)
-    )
-    if not output_file:
-        output_file = "intersect_output.csv"
-    final_df.to_csv(output_file, index=False)
-    print(f"\nIntersect saved to {output_file}")
-    return final_df
+def intersect_results(all_frames, min_count):
+    counter = Counter()
+    for df in all_frames:
+        counter.update(df["nsecode"].unique())
 
-def union(urls, output_file=None):
-    all_symbols = []
-    for url in urls:
-        try:
-            symbols = fetch_chartink(url)
-            all_symbols.extend(symbols)
-            print(f"{len(symbols)} stocks fetched from {url}")
-            time.sleep(1.5)
-        except Exception as e:
-            print(f"Error fetching {url}: {e}")
+    result = [
+        {"nsecode": k, "appearances": v}
+        for k, v in counter.items()
+        if v >= min_count
+    ]
 
-    unique_symbols = sorted(set(all_symbols))
-    df = pd.DataFrame(unique_symbols, columns=["nsecode"])
-    if not output_file:
-        output_file = "union_output.csv"
-    df.to_csv(output_file, index=False)
-    print(f"\nUnion saved to {output_file}")
-    return df
+    return pd.DataFrame(result).sort_values("appearances", ascending=False)
 
-def choose_separator():
-    print("Choose the separator used in your file:")
-    print("1) space")
-    print("2) newline")
-    print("3) comma")
-    print("4) tab")
-    print("5) custom")
-    choice = input("Enter choice [1-5]: ").strip()
-    sep_map = {"1":"space","2":"newline","3":"comma","4":"tab","5":"custom"}
-    sep = sep_map.get(choice,"newline")
-    if sep=="custom":
-        sep = input("Enter your custom separator: ")
-    return sep
+
+def union_results(all_frames):
+    combined = pd.concat(all_frames, ignore_index=True)
+    combined = combined.drop_duplicates(subset=["nsecode"])
+    return combined
 
 def main():
-    print("Welcome to Chartink CLI Interactive")
-    cmd = input("Enter command (intersect / union): ").strip().lower()
-    filename = input("Enter filename containing Chartink URLs: ").strip()
-    sep = choose_separator()
-    urls = read_urls(filename, sep)
+    if len(sys.argv) < 3:
+        print("\nUsage:")
+        print("  chartink intersect conditions.txt")
+        print("  chartink union conditions.txt\n")
+        sys.exit(1)
 
-    if cmd == "intersect":
-        min_occurrences = input("Enter minimum occurrences (default 2): ").strip()
-        min_occurrences = int(min_occurrences) if min_occurrences.isdigit() else 2
-        output_file = filename.replace(".txt","_intersect.csv")
-        intersect(urls, min_occurrences=min_occurrences, output_file=output_file)
-    elif cmd == "union":
-        output_file = filename.replace(".txt","_union.csv")
-        union(urls, output_file=output_file)
+    mode = sys.argv[1].lower()
+    file_path = sys.argv[2]
+
+    if mode not in ("intersect", "union"):
+        print("Mode must be: intersect | union")
+        sys.exit(1)
+
+    if not os.path.exists(file_path):
+        print("File not found:", file_path)
+        sys.exit(1)
+
+    conditions = read_conditions(file_path)
+    print(f"\nLoaded {len(conditions)} conditions")
+
+    session = get_session()
+    all_frames = []
+
+    for i, cond in enumerate(conditions, 1):
+        try:
+            print(f"Fetching condition {i}/{len(conditions)}...")
+            df = fetch_condition_result(session, cond)
+            if not df.empty:
+                all_frames.append(df)
+            time.sleep(1)
+        except Exception as e:
+            print(f"Skipped condition {i}: {e}")
+
+    if not all_frames:
+        print("No data fetched.")
+        sys.exit(1)
+
+    base_name = os.path.splitext(file_path)[0]
+
+    if mode == "intersect":
+        repeat = input("\nMinimum appearances? [default 2]: ").strip()
+        repeat = int(repeat) if repeat.isdigit() else 2
+        final = intersect_results(all_frames, repeat)
+        out = f"{base_name}_intersect.csv"
     else:
-        print("Invalid command! Use 'intersect' or 'union'.")
+        final = union_results(all_frames)
+        out = f"{base_name}_union.csv"
 
-if __name__=="__main__":
+    final.to_csv(out, index=False)
+    print(f"\n✅ Output saved: {out}")
+    print(f"Rows: {len(final)}")
+
+
+if __name__ == "__main__":
     main()
