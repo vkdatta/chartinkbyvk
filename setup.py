@@ -11,7 +11,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
-            "chartink=chartink:main"
+            "chartink=chartinkbyvk:main"
         ]
     },
     python_requires=">=3.8"
