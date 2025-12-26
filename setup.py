@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 setup(
     name="chartinkbyvk",
     version="0.0",
-    py_modules=["chartink"],
+    py_modules=["chartinkbyink"],
     install_requires=[
         "requests",
         "pandas",
