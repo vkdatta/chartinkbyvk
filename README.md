@@ -5,6 +5,7 @@ chartinkbyvk is a simple Interactive CLI to fetch union/intersect of multiple Ch
 ## Installation
 
 ```bash
+pip uninstall chartinkbyvk
 pip install --upgrade git+https://github.com/vkdatta/chartinkbyvk.git
 ```
 
