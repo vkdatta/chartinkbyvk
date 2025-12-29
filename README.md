@@ -23,8 +23,9 @@ pip install --upgrade --force-reinstall git+https://github.com/vkdatta/termuxess
 
 else use:
 
-``bash
-pip uninstall chartinkbyvk pip install --upgrade git+https://github.com/vkdatta/chartinkbyvk.git
+```bash
+pip uninstall chartinkbyvk
+pip install --upgrade git+https://github.com/vkdatta/chartinkbyvk.git
 ```
 
 ## Usage
